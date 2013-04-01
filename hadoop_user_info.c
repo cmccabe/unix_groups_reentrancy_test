@@ -29,6 +29,8 @@
 
 #define INITIAL_GIDS_SIZE 32
 
+static pthread_mutex_t g_getpw_lock = PTHREAD_MUTEX_INITIALIZER;
+
 struct hadoop_user_info *hadoop_user_info_alloc(int use_reentrant)
 {
   struct hadoop_user_info *uinfo;
@@ -96,7 +98,7 @@ void hadoop_user_info_free(struct hadoop_user_info *uinfo)
  *
  * @return              The error code to use
  */
-static int getpwnam_error_translate(int err)
+static int getpw_error_translate(int err)
 {
   if ((err == EIO) || (err == EMFILE) || (err == ENFILE) ||
       (err == ENOMEM) || (err == ERANGE)) {
@@ -115,7 +117,7 @@ static int hadoop_user_info_fetch_nonreentrant(struct hadoop_user_info *uinfo,
     pwd = getpwnam(username);
   } while ((!pwd) && (errno == EINTR));
   if (!pwd) {
-    return getpwnam_error_translate(errno);
+    return getpw_error_translate(errno);
   }
   uinfo->pwd.pw_name = strdup(pwd->pw_name);
   uinfo->pwd.pw_uid = pwd->pw_uid;
@@ -154,7 +156,7 @@ static int hadoop_user_info_fetch_reentrant(struct hadoop_user_info *uinfo,
       return 0;
     }
     if (err != ERANGE) {
-      return getpwnam_error_translate(errno);
+      return getpw_error_translate(errno);
     }
     buf_sz = uinfo->buf_sz * 2;
     nbuf = realloc(uinfo->buf, buf_sz);
@@ -173,14 +175,89 @@ int hadoop_user_info_fetch(struct hadoop_user_info *uinfo,
   hadoop_user_info_clear(uinfo);
 
   if (!uinfo->buf_sz) {
-    static pthread_mutex_t g_getpwnam_lock = PTHREAD_MUTEX_INITIALIZER;
-
-    pthread_mutex_lock(&g_getpwnam_lock);
+    pthread_mutex_lock(&g_getpw_lock);
     ret = hadoop_user_info_fetch_nonreentrant(uinfo, username);
-    pthread_mutex_unlock(&g_getpwnam_lock);
+    pthread_mutex_unlock(&g_getpw_lock);
     return ret;
   } else {
     return hadoop_user_info_fetch_reentrant(uinfo, username);
+  }
+}
+
+static int hadoop_user_info_id_fetch_nonreentrant(struct hadoop_user_info *uinfo,
+                                                  uid_t uid)
+{
+  struct passwd *pwd;
+
+  do {
+    errno = 0;
+    pwd = getpwuid(uid);
+  } while ((!pwd) && (errno == EINTR));
+  if (!pwd) {
+    return getpw_error_translate(errno);
+  }
+  uinfo->pwd.pw_name = strdup(pwd->pw_name);
+  uinfo->pwd.pw_uid = pwd->pw_uid;
+  uinfo->pwd.pw_gid = pwd->pw_gid;
+  uinfo->pwd.pw_passwd = strdup(pwd->pw_passwd);
+  uinfo->pwd.pw_gecos = strdup(pwd->pw_gecos);
+  uinfo->pwd.pw_dir = strdup(pwd->pw_dir);
+  uinfo->pwd.pw_shell = strdup(pwd->pw_shell);
+
+  if ((!uinfo->pwd.pw_name) ||
+      (!uinfo->pwd.pw_passwd) ||
+      (!uinfo->pwd.pw_gecos) ||
+      (!uinfo->pwd.pw_dir) ||
+      (!uinfo->pwd.pw_shell)) {
+    hadoop_user_info_clear(uinfo);
+    return ENOMEM;
+  }
+  return 0;
+}
+
+static int hadoop_user_info_id_fetch_reentrant(struct hadoop_user_info *uinfo,
+                                               uid_t uid)
+{
+  struct passwd *pwd;
+  int err;
+  size_t buf_sz;
+  char *nbuf;
+
+  for (;;) {
+    do {
+      pwd = NULL;
+      err = getpwuid_r(uid, &uinfo->pwd, uinfo->buf,
+                         uinfo->buf_sz, &pwd);
+    } while ((!pwd) && (errno == EINTR));
+    if (pwd) {
+      return 0;
+    }
+    if (err != ERANGE) {
+      return getpw_error_translate(errno);
+    }
+    buf_sz = uinfo->buf_sz * 2;
+    nbuf = realloc(uinfo->buf, buf_sz);
+    if (!nbuf) {
+      return ENOMEM;
+    }
+    uinfo->buf = nbuf;
+    uinfo->buf_sz = buf_sz;
+  }
+}
+
+int hadoop_user_id_info_fetch(struct hadoop_user_info *uinfo,
+                              uid_t uid)
+{
+  int ret;
+  hadoop_user_info_clear(uinfo);
+
+  if (!uinfo->buf_sz) {
+    pthread_mutex_lock(&g_getpw_lock);
+    ret = hadoop_user_info_id_fetch_nonreentrant(uinfo, uid);
+    pthread_mutex_unlock(&g_getpw_lock);
+    return ret;
+  } else {
+    return hadoop_user_info_id_fetch_reentrant(uinfo, uid);
   }
 }
 

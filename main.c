@@ -21,6 +21,10 @@ static gid_t *g_group_ids;
 
 static int g_num_group_ids;
 
+static uid_t *g_user_ids;
+
+static int g_num_user_ids;
+
 static pthread_mutex_t g_strerror_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static void usage(void)
@@ -67,6 +71,42 @@ static int find_all_gids(void)
 done:
   if (ginfo) {
     hadoop_group_info_free(ginfo);
+  }
+  return ret;
+}
+
+static int find_all_uids(void)
+{
+  uint32_t u;
+  uid_t *n_user_ids;
+  struct hadoop_user_info *uinfo = NULL;
+  int ret;
+
+  uinfo = hadoop_user_info_alloc(g_options.use_reentrant);
+  if (!uinfo) {
+    fprintf(stderr, "hadoop_user_info_alloc failed\n");
+    ret = ENOMEM;
+    goto done;
+  }
+  for (u = 0; u <= 65535; u++) {
+    ret = hadoop_user_id_info_fetch(uinfo, u);
+    if (ret != 0)
+      continue;
+    n_user_ids = realloc(g_user_ids,
+        sizeof(gid_t) * (g_num_user_ids + 1));
+    if (!n_user_ids) {
+      fprintf(stderr, "failed to reallocate an array of size %d\n",
+              g_num_user_ids + 1);
+      ret = ENOMEM;
+      goto done;
+    }
+    g_user_ids = n_user_ids;
+    g_user_ids[g_num_user_ids++] = u;
+  }
+  ret = 0;
+done:
+  if (uinfo) {
+    hadoop_user_info_free(uinfo);
   }
   return ret;
 }
@@ -214,6 +254,22 @@ int main(int argc, char **argv)
     fprintf(stderr, "found group IDs: ");
     for (i = 0; i < g_num_group_ids; i++) {
       fprintf(stderr, "%s%" PRId64, prefix, (uint64_t)g_group_ids[i]);
+      prefix = ", ";
+    }
+    fprintf(stderr, "\n");
+  }
+  fprintf(stderr, "locating all users on system...\n");
+  ret = find_all_uids();
+  if (ret) {
+    fprintf(stderr, "failed to find all uids: error %d (%s)\n",
+            ret, strerror(ret));
+    exit(EXIT_FAILURE);
+  }
+  if (g_options.verbose) {
+    const char *prefix = "";
+    fprintf(stderr, "found user IDs: ");
+    for (i = 0; i < g_num_user_ids; i++) {
+      fprintf(stderr, "%s%" PRId64, prefix, (uint64_t)g_user_ids[i]);
       prefix = ", ";
     }
     fprintf(stderr, "\n");

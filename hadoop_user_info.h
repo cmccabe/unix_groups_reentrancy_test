@@ -62,6 +62,20 @@ int hadoop_user_info_fetch(struct hadoop_user_info *uinfo,
                            const char *username);
 
 /**
+ * Look up information for a user ID.
+ *
+ * @param uinfo                   The hadoop user info context.
+ *                                Existing data in this context will be cleared.
+ * @param uid                     The user ID to look up.
+ *
+ * @return                        ENOENT if the user wasn't found;
+ *                                0 on success;
+ *                                EIO, EMFILE, ENFILE, or ENOMEM if appropriate.
+ */
+int hadoop_user_id_info_fetch(struct hadoop_user_info *uinfo,
+                              uid_t uid);
+
+/**
  * Look up the groups this user belongs to. 
  *
  * @param uinfo                   The hadoop user info context.
